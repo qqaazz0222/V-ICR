@@ -81,9 +81,9 @@ class Logger:
         """
         self.console.print()
         self.console.print(Panel(
-            f"[bold cyan]{title}[/bold cyan]",
+            f"[bold]{title}[/bold]",
             box=box.DOUBLE,
-            border_style="cyan",
+            border_style="white",
             padding=(0, 2)
         ))
         self.console.print()

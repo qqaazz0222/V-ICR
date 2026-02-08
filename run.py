@@ -43,7 +43,7 @@ if __name__ == "__main__":
     
     # [KOR] 헤더 출력
     # [ENG] Print header
-    logger.print_header("V-ICR Video Processor")
+    logger.print_header("V-ICR: End-to-end pipeline that detects and tracks people in videos and recognizes their actions using Vision-Language Models (VLM)")
     
     # [KOR] 비디오 데이터셋 로드
     # [ENG] Load video dataset

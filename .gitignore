@@ -1,0 +1,105 @@
+# [KOR] Python 관련
+# [ENG] Python related
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# [KOR] 가상 환경
+# [ENG] Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# [KOR] IDE 및 에디터
+# [ENG] IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# [KOR] Jupyter Notebook
+# [ENG] Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# [KOR] 데이터 디렉토리
+# [ENG] Data directories
+data/input/*
+data/working/*
+data/output/*
+!data/input/.gitkeep
+!data/working/.gitkeep
+!data/output/.gitkeep
+
+# [KOR] 모델 가중치
+# [ENG] Model weights
+*.pt
+*.pth
+*.onnx
+*.engine
+*.bin
+weights/
+
+# [KOR] 로그 파일
+# [ENG] Log files
+*.log
+logs/
+
+# [KOR] 임시 파일
+# [ENG] Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# [KOR] 캐시
+# [ENG] Cache
+.cache/
+*.cache
+.huggingface/
+
+# [KOR] 테스트 관련
+# [ENG] Test related
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# [KOR] 비디오 및 이미지 파일 (대용량)
+# [ENG] Video and image files (large)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+# 입력 샘플은 예외
+# Exception for input samples
+!data/input/*.mp4

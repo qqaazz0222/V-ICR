@@ -1,0 +1,19 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+# ByteTrack tuned configuration for V-ICR person tracking
+# Optimized for action recognition pipeline with stable person tracking
+
+tracker_type: bytetrack  # (str) Tracker backend: bytetrack
+
+# Thresholds tuned for person detection with high confidence
+track_high_thresh: 0.5   # (float) First-stage match threshold; higher for cleaner person tracks
+track_low_thresh: 0.1    # (float) Second-stage threshold for low-score matches
+new_track_thresh: 0.6    # (float) Start new track threshold; matches conf=0.6 in detector.py
+
+# Buffer tuned for action recognition (handles brief occlusions)
+track_buffer: 60         # (int) Frames to keep lost tracks alive; ~2 sec at 30fps
+
+# Association threshold
+match_thresh: 0.8        # (float) IoU-based association threshold
+
+# Score fusion for stable detection
+fuse_score: True         # (bool) Fuse detection score with IoU for matching

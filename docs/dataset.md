@@ -207,20 +207,20 @@ with logger.progress_bar(len(dataset), "Processing") as progress_ctx:
 
 ```
 data/
-├── input/              # 입력 비디오 (사용자가 배치)
-│   ├── video1.mp4
-│   ├── video2.mp4
-│   └── label_map.txt   # 사전 정의된 라벨맵 (선택사항)
-├── working/            # 작업 디렉토리 (자동 생성)
-│   ├── video1/
-│   │   ├── tubes/
-│   │   │   ├── id_1.mp4
-│   │   │   ├── metadata.json
-│   │   │   └── recognition_results.json
-│   │   └── label_map.txt
-│   └── video2/
-│       └── ...
+ ├─ input/              # 입력 비디오 (사용자가 배치)
+ │   ├─ ─ video1.mp4
+ │   ├─ ─ video2.mp4
+ │  └─ ─ label_map.txt   # 사전 정의된 라벨맵 (선택사항)
+ ├─ working/            # 작업 디렉토리 (자동 생성)
+ │   ├─ ─ video1/
+ │   │   ├─ ─ tubes/
+ │   │   │   ├─ ─ id_1.mp4
+ │   │   │   ├─ ─ metadata.json
+ │   │   │  └─ ─ recognition_results.json
+ │   │  └─ ─ label_map.txt
+ │  └─ ─ video2/
+ │      └─ ─ ...
 └── output/             # 출력 디렉토리 (자동 생성)
-    ├── video1.json
-    └── video2.json
+     ├─ ─ video1.json
+    └─ ─ video2.json
 ```

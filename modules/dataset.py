@@ -39,6 +39,7 @@ class VideoDataset:
     SUPPORTED_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".webm"]
     
     def __init__(self, 
+                 dataset: str = "demo",
                  input_dir: str = "./data/input",
                  working_dir: str = "./data/working",
                  output_dir: str = "./data/output"):
@@ -51,9 +52,9 @@ class VideoDataset:
             working_dir: [KOR] 작업 디렉토리 / [ENG] Working directory
             output_dir: [KOR] 출력 디렉토리 / [ENG] Output directory
         """
-        self.input_dir = input_dir
-        self.working_dir = working_dir
-        self.output_dir = output_dir
+        self.input_dir = os.path.join(input_dir, dataset)
+        self.working_dir = os.path.join(working_dir, dataset)
+        self.output_dir = os.path.join(output_dir, dataset)
         
         # [KOR] 디렉토리 생성
         # [ENG] Create directories

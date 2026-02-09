@@ -8,11 +8,13 @@
 
 ## 핵심 특징
 
+- **Phase 0 Action Discovery**: 대표 튜브 샘플링 → 자유 측셔닝 → labelmap 자동 생성
+- **K-Means 기반 샘플링**: 모션 특징으로 다양한 튜브 대표 선택
 - **1초 단위 분석**: 튜브 영상을 1초 세그먼트로 분할하여 분석
 - **Soft-Label**: 각 초마다 5개의 행동 후보군 (action, confidence 쌍)
-- **유사 행동 그룹화**: Phase 1 후 유사한 행동들을 대표 행동으로 그룹화
-- **Labelmap 기반 정제**: 그룹화된 labelmap 내의 행동만으로 확률값 판단
-- **최종 출력**: `id-time-action` 형식의 정제된 결과
+- **Labelmap 기반 정제**: 확정된 labelmap 내의 행동만으로 분류
+- **GPU 메모리 최적화**: 추론 전후 매모리 정리
+- **비디오 정보 캐싱**: 중복 I/O 감소
 
 ## 클래스: Recognizer
 
@@ -62,47 +64,49 @@ result = recognizer.recognize(
 
 ## 파이프라인 구조
 
-### 기본 동작 (자동 그룹화)
+### 새로운 3-Phase 구조
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Phase 1: 초기 분석 (1초 단위)                                    │
-│                                                                  │
-│  모든 튜브에 대해:                                                │
-│  [0초] → 5개 후보 → ["standing", "looking", "waiting", ...]      │
-│  [1초] → 5개 후보                                                 │
-│  ...                                                             │
-│                                                                  │
-│  모든 감지된 행동 수집                                            │
+│  Phase 0: Action Discovery (사전 정의 labelmap 없을 때)       │
+ │                                                                 │
+│  1. _extract_motion_features(): 모션 특징 추출 (8차원)            │
+│     - 속도 (x, y), 표준편차, 총 이동량, 크기 변화                   │
+ │                                                                 │
+│  2. _sample_representative_tubes(): K-Means로 대표 튜브 선택      │
+│     - 전체 N개 튜브 중 15개 다양한 대표 선정                       │
+ │                                                                 │
+│  3. _caption_tube_freeform(): 자유 형식 캐셔닝                    │
+│     - "walking slowly while carrying a bag" 형식                  │
+ │                                                                 │
+│  4. _discover_action_vocabulary(): LLM으로 카테고리화              │
+│     - 캐션들을 5-15개 카테고리로 그룹화 → labelmap 생성           │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Phase 2: 유사 행동 그룹화 & Labelmap 생성                        │
-│                                                                  │
-│  VLM을 통해 유사 행동 그룹화:                                     │
-│  - "sitting down" + "standing up" 반복 → "squatting"             │
-│  - "walking forward" + "moving" → "walking"                      │
-│                                                                  │
-│  → label_map.txt 저장 (working 디렉토리)                          │
-│  → 5~10개의 대표 행동 카테고리                                    │
+│  Phase 1: Classification (확정된 labelmap 기반 분류)             │
+ │                                                                 │
+│  모든 튜브에 대해:                                                 │
+│  - labelmap 내 행동 중에서 객관식 분류                            │
+│  - 1초 단위 soft-label 5개 생성                                 │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Phase 3: Labelmap 기반 반복 정제                                 │
-│                                                                  │
-│  매 초마다:                                                       │
-│  - 이전/다음 초 컨텍스트                                          │
-│  - Labelmap 내 행동에 대해서만 확률값 판단                         │
-│                                                                  │
+│  Phase 2: Refinement (반복 정제)                                 │
+ │                                                                 │
+│  매 초마다:                                                        │
+│  - 이전/다음 초 컨텍스트                                           │
+│  - Labelmap 내 행동에 대해서만 확률값 판단                          │
+ │                                                                 │
 │  반복 횟수: iterations - 1                                        │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Phase 4: 최종 id-time-action 추출                               │
-│                                                                  │
+│  최종 출력: id-time-action 추출                                  │
+ │                                                                 │
 │  각 초의 top-1 후보 → {id, time, action, confidence}             │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -112,27 +116,16 @@ result = recognizer.recognize(
 `data/input/label_map.txt`에 라벨 목록이 존재하거나 `predefined_labelmap` 파라미터가 전달되면:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 1: 초기 분석 (사전 정의된 라벨만 사용)                       │
-│                                                                  │
-│  VLM에 "이 라벨 중에서만 선택하세요" 라는 제약 조건 제공            │
-│  → 처음부터 labelmap 내의 행동만 후보로 생성                       │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 2: 스킵됨                                                 │
-│                                                                  │
-│  그룹화 불필요 - 이미 정의된 라벨 사용                             │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-                    (Phase 3 → Phase 4 동일)
+Phase 0: 스킵 (이미 labelmap 확정)
+    ↓
+Phase 1: 사전 정의된 라벨로 객관식 분류
+    ↓
+Phase 2: 반복 정제
 ```
 
 **장점:**
 - 일관된 라벨링: 여러 비디오에서 동일한 라벨 사용 보장
-- 빠른 처리: VLM 그룹화 단계 스킵
+- 빠른 처리: Phase 0 스킵으로 VLM 호출 감소
 - 도메인 특화: 특정 도메인의 행동 어휘만 사용
 
 ---
@@ -236,7 +229,43 @@ looking around, observing, turning head, ...
 
 ## 내부 메서드
 
-### `_group_similar_actions(all_actions, video_path)`
+### Phase 0 메서드
+
+#### `_extract_motion_features(tube_id, tubes_dir, metadata)`
+
+튜브의 모션 특징을 추출합니다 (8차원 벡터).
+
+**추출 특징:**
+- 평균 x/y 속도
+- x/y 속도 표준편차
+- 총 이동량
+- 평균 크기 (width, height)
+- 크기 변화량
+
+#### `_sample_representative_tubes(metadata, tubes_dir, n_samples=15)`
+
+K-Means 클러스터링으로 다양한 모션 패턴을 가진 대표 튜브를 선택합니다.
+
+#### `_caption_tube_freeform(tube_path)`
+
+튜브에 대해 자유 형식 캐셔닝을 수행합니다.
+
+**출력 예시:**
+- "walking slowly while carrying a bag"
+- "doing push-ups on the floor"
+- "waving hand in greeting"
+
+#### `_discover_action_vocabulary(metadata, tubes_dir, video_path)`
+
+대표 튜브의 캐션을 LLM으로 요약하여 labelmap을 생성합니다.
+
+**반환값:** `(labelmap, action_groups)` 튜플
+
+---
+
+### 기타 메서드
+
+#### `_group_similar_actions(all_actions, video_path)`
 
 VLM을 사용하여 유사한 행동을 그룹화합니다.
 
@@ -252,15 +281,15 @@ VLM을 사용하여 유사한 행동을 그룹화합니다.
 }
 ```
 
-### `_create_labelmap(action_groups, save_dir)`
+#### `_create_labelmap(action_groups, save_dir)`
 
 그룹화 결과를 label_map.txt로 저장합니다.
 
-### `_map_action_to_label(action, action_groups)`
+#### `_map_action_to_label(action, action_groups)`
 
 원본 행동 이름을 대표 레이블로 매핑합니다.
 
-### `_refine_second_with_labelmap(frames, candidates, labelmap, prev_action, next_action)`
+#### `_refine_second_with_labelmap(frames, candidates, labelmap, prev_action, next_action)`
 
 **Labelmap 내의 행동만** 사용하여 확률값을 재산정합니다.
 
@@ -316,7 +345,8 @@ cat data/working/video/label_map.txt
 
 | 항목 | 이전 | 현재 |
 |------|------|------|
-| 행동 어휘 | 무제한 | Labelmap으로 제한 |
-| 그룹화 | 없음 | VLM 기반 자동 그룹화 |
-| 정제 방식 | 전체 어휘 사용 | Labelmap 내 행동만 |
-| 출력 파일 | recognition_results.json | + label_map.txt |
+| labelmap 생성 | 모든 튜브 분석 후 | Phase 0에서 대표 15개만 |
+| 샘플링 | 없음 | K-Means 기반 모션 샘플링 |
+| VLM 호출 | N × 초 수 | 15 + N × 초 수 |
+| 메모리 | 관리 없음 | GPU 캐시 자동 정리 |
+| 비디오 정보 | 매번 읽기 | 캐싱 적용 |

@@ -5,9 +5,17 @@ import os
 import re
 import json
 import cv2
+import torch
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
+
+try:
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
 
 
 class Recognizer:
@@ -21,9 +29,10 @@ class Recognizer:
           generating soft-labels with top-5 candidates and iteratively refining them.
     
     Features:
+    - [KOR] Phase 0: 대표 튜브 샘플링 및 자동 labelmap 생성 / [ENG] Phase 0: Representative tube sampling and automatic labelmap generation
     - [KOR] 1초 간격 분석 / [ENG] 1-second interval analysis
     - [KOR] 초당 5개 후보 soft-label / [ENG] Soft-labels with 5 candidates per second
-    - [KOR] 초기 단계 후 labelmap 생성을 위한 행동 그룹화 / [ENG] Action grouping after initial phase to create a labelmap
+    - [KOR] Feature 기반 군집화 정제 / [ENG] Feature-based clustering refinement
     - [KOR] labelmap 행동만 사용한 제한된 정제 / [ENG] Constrained refinement using only labelmap actions
     
     [KOR] 출력 형식: id-time-action 트리플
@@ -56,16 +65,25 @@ class Recognizer:
             device_map="auto"
         )
         self.processor = AutoProcessor.from_pretrained(self.model_name)
+        
+        # [KOR] 비디오 정보 캐시
+        # [ENG] Video info cache
+        self._video_info_cache: Dict[str, Tuple[float, int, int]] = {}
     
     def _get_video_info(self, video_path: str) -> Tuple[float, int, int]:
         """
-        [KOR] 비디오 FPS, 총 프레임 수, 초 단위 길이 반환
-        [ENG] Get video FPS, total frames, and duration in seconds
+        [KOR] 비디오 FPS, 총 프레임 수, 초 단위 길이 반환 (캐시 적용)
+        [ENG] Get video FPS, total frames, and duration in seconds (with caching)
         
         Returns:
             [KOR] (fps, 총_프레임수, 초_단위_길이) 튜플
             [ENG] Tuple of (fps, total_frames, duration_seconds)
         """
+        # [KOR] 캐시 확인
+        # [ENG] Check cache
+        if video_path in self._video_info_cache:
+            return self._video_info_cache[video_path]
+        
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -74,7 +92,12 @@ class Recognizer:
         if fps <= 0:
             fps = 30.0
         duration = int(total_frames / fps)
-        return fps, total_frames, duration
+        
+        # [KOR] 캐시 저장
+        # [ENG] Store cache
+        result = (fps, total_frames, duration)
+        self._video_info_cache[video_path] = result
+        return result
     
     def _extract_frames_for_second(self, video_path: str, second: int, 
                                     fps: float, num_frames: int = 4) -> List[np.ndarray]:
@@ -193,6 +216,11 @@ class Recognizer:
         )
         inputs = inputs.to(self.model.device)
         
+        # [KOR] GPU 메모리 최적화: 추론 전 캐시 정리
+        # [ENG] GPU memory optimization: clear cache before inference
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         generated_ids = self.model.generate(**inputs, max_new_tokens=1024)
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -200,6 +228,13 @@ class Recognizer:
         output = self.processor.batch_decode(
             generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
+        
+        # [KOR] 추론 후 메모리 정리
+        # [ENG] Clear memory after inference
+        del inputs, generated_ids, generated_ids_trimmed
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         return output[0]
     
     def _parse_json_response(self, response: str) -> Any:
@@ -575,6 +610,261 @@ Rules:
         # [ENG] Fallback: distribute evenly across labelmap
         return [{"action": l.lower(), "confidence": 1.0/len(labelmap)} for l in labelmap[:5]]
     
+    # ==========================================
+    # [KOR] Phase 0: Action Discovery (대표 행동 발견)
+    # [ENG] Phase 0: Action Discovery
+    # ==========================================
+    
+    def _extract_motion_features(self, tube_id: str, tubes_dir: str, metadata: Dict) -> np.ndarray:
+        """
+        [KOR] 튜브의 모션 특징 추출 (속도, 이동량, 크기 변화)
+        [ENG] Extract motion features from tube (velocity, displacement, size change)
+        
+        Args:
+            tube_id: [KOR] 튜브 ID / [ENG] Tube ID
+            tubes_dir: [KOR] 튜브 디렉토리 / [ENG] Tubes directory
+            metadata: [KOR] 메타데이터 / [ENG] Metadata
+            
+        Returns:
+            [KOR] 모션 특징 벡터 (8차원) / [ENG] Motion feature vector (8-dim)
+        """
+        tube_meta = metadata.get(tube_id, {})
+        bboxes = tube_meta.get("bboxes", [])
+        
+        if len(bboxes) < 2:
+            return np.zeros(8)
+        
+        # [KOR] BBox 중심점 계산
+        # [ENG] Calculate bbox centers
+        centers = []
+        sizes = []
+        for bbox_entry in bboxes:
+            box = bbox_entry["box"]  # [x1, y1, x2, y2]
+            cx = (box[0] + box[2]) / 2
+            cy = (box[1] + box[3]) / 2
+            w = box[2] - box[0]
+            h = box[3] - box[1]
+            centers.append([cx, cy])
+            sizes.append([w, h])
+        
+        centers = np.array(centers)
+        sizes = np.array(sizes)
+        
+        # [KOR] 속도 계산 (프레임 간 이동)
+        # [ENG] Calculate velocity (movement between frames)
+        velocities = np.diff(centers, axis=0)
+        
+        # [KOR] 특징 추출
+        # [ENG] Extract features
+        features = [
+            np.mean(np.abs(velocities[:, 0])) if len(velocities) > 0 else 0,  # mean x velocity
+            np.mean(np.abs(velocities[:, 1])) if len(velocities) > 0 else 0,  # mean y velocity
+            np.std(velocities[:, 0]) if len(velocities) > 0 else 0,           # x velocity std
+            np.std(velocities[:, 1]) if len(velocities) > 0 else 0,           # y velocity std
+            np.sum(np.sqrt(np.sum(velocities**2, axis=1))) if len(velocities) > 0 else 0,  # total displacement
+            np.mean(sizes[:, 0]),                                              # mean width
+            np.mean(sizes[:, 1]),                                              # mean height
+            np.std(sizes[:, 0] * sizes[:, 1]) if len(sizes) > 1 else 0        # size variation
+        ]
+        
+        return np.array(features)
+    
+    def _sample_representative_tubes(self, metadata: Dict, tubes_dir: str, 
+                                      n_samples: int = 15) -> List[str]:
+        """
+        [KOR] K-Means를 사용하여 대표 튜브 샘플링
+        [ENG] Sample representative tubes using K-Means clustering
+        
+        Args:
+            metadata: [KOR] 메타데이터 / [ENG] Metadata
+            tubes_dir: [KOR] 튜브 디렉토리 / [ENG] Tubes directory
+            n_samples: [KOR] 샘플 수 / [ENG] Number of samples
+            
+        Returns:
+            [KOR] 대표 튜브 ID 리스트 / [ENG] List of representative tube IDs
+        """
+        tube_ids = list(metadata.keys())
+        
+        if len(tube_ids) <= n_samples:
+            return tube_ids
+        
+        if not SKLEARN_AVAILABLE:
+            # [KOR] sklearn 없으면 균등 샘플링
+            # [ENG] Uniform sampling if sklearn not available
+            step = len(tube_ids) // n_samples
+            return [tube_ids[i * step] for i in range(n_samples)]
+        
+        # [KOR] 모션 특징 추출
+        # [ENG] Extract motion features
+        features = []
+        valid_ids = []
+        for tube_id in tube_ids:
+            feat = self._extract_motion_features(tube_id, tubes_dir, metadata)
+            if np.sum(np.abs(feat)) > 0:  # 유효한 특징만
+                features.append(feat)
+                valid_ids.append(tube_id)
+        
+        if len(features) < n_samples:
+            return valid_ids
+        
+        features = np.array(features)
+        
+        # [KOR] 정규화
+        # [ENG] Normalize
+        scaler = StandardScaler()
+        features_scaled = scaler.fit_transform(features)
+        
+        # [KOR] K-Means 군집화
+        # [ENG] K-Means clustering
+        n_clusters = min(n_samples, len(features))
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(features_scaled)
+        
+        # [KOR] 각 클러스터에서 중심에 가장 가까운 튜브 선택
+        # [ENG] Select tube closest to center in each cluster
+        selected = []
+        for cluster_id in range(n_clusters):
+            cluster_mask = labels == cluster_id
+            cluster_indices = np.where(cluster_mask)[0]
+            
+            if len(cluster_indices) > 0:
+                cluster_features = features_scaled[cluster_mask]
+                center = kmeans.cluster_centers_[cluster_id]
+                distances = np.linalg.norm(cluster_features - center, axis=1)
+                closest_idx = cluster_indices[np.argmin(distances)]
+                selected.append(valid_ids[closest_idx])
+        
+        return selected
+    
+    def _caption_tube_freeform(self, tube_path: str) -> str:
+        """
+        [KOR] 튜브에 대해 자유 형식 캡셔닝 수행
+        [ENG] Perform free-form captioning on a tube
+        
+        Args:
+            tube_path: [KOR] 튜브 비디오 경로 / [ENG] Path to tube video
+            
+        Returns:
+            [KOR] 행동 설명 캡션 / [ENG] Action description caption
+        """
+        fps, total_frames, duration = self._get_video_info(tube_path)
+        
+        if duration <= 0:
+            return "unknown action"
+        
+        # [KOR] 전체 비디오에서 균등하게 프레임 추출
+        # [ENG] Extract frames uniformly from entire video
+        frames = self._extract_frames(tube_path, fps=2.0, max_frames=8)
+        
+        if not frames:
+            return "unknown action"
+        
+        prompt = """Describe the action being performed by the person in these video frames.
+Focus on:
+1. The main physical action (e.g., walking, running, sitting, jumping)
+2. Any objects being interacted with
+3. The manner or style of the action
+
+Provide a concise description in 5-10 words.
+Example outputs: "walking slowly while carrying a bag", "doing push-ups on the floor", "waving hand in greeting"
+
+Your response (action description only):"""
+
+        response = self._inference(frames, prompt)
+        
+        # [KOR] 응답 정리
+        # [ENG] Clean up response
+        action = response.strip().lower()
+        # 첫 문장만 사용
+        action = action.split('.')[0].split('\n')[0]
+        
+        return action if action else "unknown action"
+    
+    def _discover_action_vocabulary(self, metadata: Dict, tubes_dir: str, 
+                                     video_path: str) -> Tuple[List[str], Dict[str, List[str]]]:
+        """
+        [KOR] Phase 0: 대표 튜브 분석으로 행동 어휘 발견
+        [ENG] Phase 0: Discover action vocabulary by analyzing representative tubes
+        
+        Args:
+            metadata: [KOR] 메타데이터 / [ENG] Metadata
+            tubes_dir: [KOR] 튜브 디렉토리 / [ENG] Tubes directory
+            video_path: [KOR] 원본 비디오 경로 / [ENG] Original video path
+            
+        Returns:
+            [KOR] (labelmap, action_groups) 튜플 / [ENG] Tuple of (labelmap, action_groups)
+        """
+        print(" │  ├─ Phase 0: Discovering action vocabulary...")
+        
+        # [KOR] 1. 대표 튜브 샘플링
+        # [ENG] 1. Sample representative tubes
+        representative_tubes = self._sample_representative_tubes(metadata, tubes_dir, n_samples=15)
+        print(f" │  │  └─ Sampled {len(representative_tubes)} representative tubes")
+        
+        # [KOR] 2. 자유 형식 캡셔닝
+        # [ENG] 2. Free-form captioning
+        captions = []
+        for tube_id in representative_tubes:
+            tube_path = os.path.join(tubes_dir, f"{tube_id}.mp4")
+            if os.path.exists(tube_path):
+                caption = self._caption_tube_freeform(tube_path)
+                if caption and caption != "unknown action":
+                    captions.append(caption)
+        
+        if not captions:
+            # [KOR] 폴백: 기본 행동 세트
+            # [ENG] Fallback: default action set
+            return ["standing", "walking", "sitting", "unknown"], {"standing": ["standing"], "walking": ["walking"], "sitting": ["sitting"], "unknown": ["unknown"]}
+        
+        # [KOR] 3. LLM으로 캡션 요약 및 카테고리화
+        # [ENG] 3. Summarize and categorize captions with LLM
+        captions_str = "\n".join([f"- {c}" for c in captions])
+        
+        # [KOR] 컨텍스트 프레임 가져오기
+        # [ENG] Get context frames
+        frames = self._extract_frames(video_path, fps=0.5, max_frames=4)
+        
+        prompt = f"""Based on these action descriptions observed in a video:
+{captions_str}
+
+Create a concise action vocabulary (label map) that:
+1. Groups similar actions into categories
+2. Uses simple, clear action names
+3. Has 5-15 categories maximum
+4. Each category name should be 1-3 words
+
+Output a JSON object where keys are category names and values are lists of original descriptions that belong to that category:
+{{
+  "walking": ["walking slowly", "moving forward"],
+  "sitting": ["sitting down", "seated"],
+  ...
+}}
+
+Return ONLY the JSON object."""
+
+        response = self._inference(frames, prompt)
+        result = self._parse_json_response(response)
+        
+        if isinstance(result, dict) and not result.get("raw_response"):
+            # [KOR] 유효한 그룹
+            # [ENG] Valid groups
+            action_groups = {}
+            for category, descriptions in result.items():
+                cat_name = str(category).lower().strip()
+                if isinstance(descriptions, list):
+                    action_groups[cat_name] = [str(d).lower().strip() for d in descriptions]
+                else:
+                    action_groups[cat_name] = [cat_name]
+            
+            labelmap = sorted(action_groups.keys())
+            return labelmap, action_groups
+        
+        # [KOR] 폴백: 직접 그룹화
+        # [ENG] Fallback: group directly using existing method
+        action_groups = self._group_similar_actions(captions, video_path)
+        labelmap = sorted(action_groups.keys())
+        return labelmap, action_groups
+    
     def _analyze_tube_temporal(self, tube_path: str, video_path: str, 
                                 working_dir: str, iterations: int = 2,
                                 predefined_labelmap: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -646,17 +936,17 @@ Rules:
             [KOR] id-time-action 형식의 인식 결과 딕셔너리
             [ENG] Dictionary with recognition results in id-time-action format
         """
-        print("    [>] Recognizing actions...")
+        print(" ├─[>] Recognizing actions...")
         
         # [KOR] 사전 정의된 labelmap 사용 여부 확인
         # [ENG] Check if using predefined labelmap
         use_predefined = predefined_labelmap is not None and len(predefined_labelmap) > 0
         if use_predefined:
-            print(f"        Using predefined label-map: {len(predefined_labelmap)} labels")
+            print(f" │  ├─ Using predefined label-map: {len(predefined_labelmap)} labels")
         
         # [KOR] 메타데이터 로드
         # [ENG] Load metadata
-        metadata_path = os.path.join(tubes_dir, "metadata.json")
+        metadata_path = os.path.join(os.path.dirname(tubes_dir), "metadata.json")
         if not os.path.exists(metadata_path):
             return {"error": "Metadata not found", "tubes": {}}
         
@@ -668,31 +958,10 @@ Rules:
         working_dir = os.path.dirname(tubes_dir)
         
         # ==========================================
-        # [KOR] Phase 1: 모든 튜브의 초기 분석
-        # [ENG] Phase 1: Initial analysis of all tubes
-        # ==========================================
-        print(f"        Phase 1: Initial analysis of {len(metadata)} tubes...")
-        tube_initial_results = {}
-        all_detected_actions = []
-        
-        for tube_id in metadata.keys():
-            tube_path = os.path.join(tubes_dir, f"{tube_id}.mp4")
-            if os.path.exists(tube_path):
-                result = self._analyze_tube_temporal(
-                    tube_path, video_path, working_dir, iterations,
-                    predefined_labelmap=predefined_labelmap if use_predefined else None
-                )
-                tube_initial_results[tube_id] = result
-                all_detected_actions.extend(result.get("detected_actions", []))
-        
-        # ==========================================
-        # [KOR] Phase 2: 유사 행동 그룹화 & labelmap 생성
-        # [ENG] Phase 2: Group similar actions & create labelmap
+        # [KOR] Phase 0: 행동 어휘 발견 (사전 정의 없을 때)
+        # [ENG] Phase 0: Discover action vocabulary (when no predefined)
         # ==========================================
         if use_predefined:
-            # [KOR] 사전 정의된 labelmap 사용 - 그룹화 스킵
-            # [ENG] Use predefined labelmap - skip grouping
-            print("        Phase 2: Using predefined label-map (skipping grouping)...")
             labelmap = [l.lower() for l in predefined_labelmap]
             action_groups = {l: [l] for l in labelmap}
             
@@ -703,30 +972,48 @@ Rules:
                 for i, label in enumerate(labelmap):
                     f.write(f"{i}: {label}\n")
         else:
-            # [KOR] 기존 로직: VLM 기반 그룹화
-            # [ENG] Original logic: VLM-based grouping
-            print("        Phase 2: Grouping similar actions...")
-            action_groups = self._group_similar_actions(all_detected_actions, video_path)
-            labelmap = self._create_labelmap(action_groups, working_dir)
+            # [KOR] Phase 0: 대표 튜브 기반 어휘 발견
+            # [ENG] Phase 0: Discovery from representative tubes
+            labelmap, action_groups = self._discover_action_vocabulary(
+                metadata, tubes_dir, video_path
+            )
+            
+            # [KOR] 발견된 labelmap 저장
+            # [ENG] Save discovered labelmap
+            labelmap_path = os.path.join(working_dir, "label_map.txt")
+            with open(labelmap_path, "w", encoding="utf-8") as f:
+                for i, label in enumerate(labelmap):
+                    f.write(f"{i}: {label}\n")
         
-        print(f"        Label-Map created: {len(labelmap)} action types")
-        
-        # [KOR] 초기 결과를 labelmap에 매핑 (사전 정의된 경우 이미 매핑됨)
-        # [ENG] Map initial results to labelmap (already mapped if predefined)
-        if not use_predefined:
-            for tube_id, result in tube_initial_results.items():
-                temporal_labels = result.get("temporal_labels", {})
-                for sec, candidates in temporal_labels.items():
-                    for c in candidates:
-                        c["action"] = self._map_action_to_label(c["action"], action_groups)
+        print(f" │  ├─ Label-Map: {len(labelmap)} action types")
         
         # ==========================================
-        # [KOR] Phase 3: labelmap을 사용한 반복 정제
-        # [ENG] Phase 3: Iterative refinement with labelmap
+        # [KOR] Phase 1: 확정된 labelmap으로 모든 튜브 분류
+        # [ENG] Phase 1: Classify all tubes with confirmed labelmap
+        # ==========================================
+        print(f" │  ├─ Phase 1: Classifying {len(metadata)} tubes with labelmap...")
+        tube_initial_results = {}
+        all_detected_actions = []
+        
+        for tube_id in metadata.keys():
+            tube_path = os.path.join(tubes_dir, f"{tube_id}.mp4")
+            if os.path.exists(tube_path):
+                # [KOR] labelmap을 predefined로 전달하여 객관식 분류
+                # [ENG] Pass labelmap as predefined for multiple-choice classification
+                result = self._analyze_tube_temporal(
+                    tube_path, video_path, working_dir, iterations,
+                    predefined_labelmap=labelmap
+                )
+                tube_initial_results[tube_id] = result
+                all_detected_actions.extend(result.get("detected_actions", []))
+        
+        # ==========================================
+        # [KOR] Phase 2: labelmap을 사용한 반복 정제
+        # [ENG] Phase 2: Iterative refinement with labelmap
         # ==========================================
         if iterations > 1:
             for iteration in range(iterations - 1):
-                print(f"        Phase 3: Refinement iteration ({iteration + 1}/{iterations})...")
+                print(f" │  ├─ Phase 2: Refinement iteration ({iteration + 1}/{iterations})...")
                 
                 for tube_id, result in tube_initial_results.items():
                     tube_path = os.path.join(tubes_dir, f"{tube_id}.mp4")
@@ -814,12 +1101,12 @@ Rules:
         
         # [KOR] 결과 저장
         # [ENG] Save results
-        output_path = os.path.join(tubes_dir, "recognition_results.json")
+        output_path = os.path.join(working_dir, "recognition_results.json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(final_result, f, indent=2, ensure_ascii=False)
         
-        print(f"        Actions: {len(labelmap)} types in labelmap")
-        print(f"        Temporal labels: {len(id_time_actions)} id-time-action entries")
+        print(f" │  ├─ Actions: {len(labelmap)} types in labelmap")
+        print(f" │  └─ Temporal labels: {len(id_time_actions)} id-time-action entries")
         
         return final_result
 

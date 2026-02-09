@@ -10,6 +10,7 @@
 
 - **데이터 통합**: 추적 메타데이터 + 인식 결과 조합
 - **프레임 단위 라벨링**: 각 프레임에 bbox와 행동 라벨 매핑
+- **비디오 레벨 라벨**: 영상 전체의 대표 행동 자동 추출
 - **Labelmap 포함**: 행동 ID와 이름 매핑 정보
 - **통계 요약**: 행동 분포 및 전체 통계
 
@@ -93,6 +94,16 @@ data/output/<video_name>.json
       "standing and moving": 3,
       "boxing practice": 16
     }
+  },
+  "video_action": {
+    "primary_action": "boxing practice",
+    "primary_action_id": 1,
+    "primary_percentage": 44.4,
+    "top_actions": [
+      {"action": "boxing practice", "count": 16, "percentage": 44.4},
+      {"action": "defending", "count": 3, "percentage": 8.3}
+    ],
+    "description": "This video primarily shows 'boxing practice' (44.4% of all detected actions)"
   }
 }
 ```
@@ -217,6 +228,51 @@ data/output/<video_name>.json
 
 ---
 
+## video_action 필드 (NEW)
+
+영상 전체에 대한 대표 행동 정보
+
+```json
+{
+  "video_action": {
+    "primary_action": "boxing practice",
+    "primary_action_id": 1,
+    "primary_percentage": 44.4,
+    "top_actions": [
+      {"action": "boxing practice", "count": 16, "percentage": 44.4},
+      {"action": "defending", "count": 3, "percentage": 8.3},
+      {"action": "standing", "count": 2, "percentage": 5.6}
+    ],
+    "description": "This video primarily shows 'boxing practice' (44.4% of all detected actions)"
+  }
+}
+```
+
+### 필드 설명
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `primary_action` | string | 가장 빈번한 행동 |
+| `primary_action_id` | int | labelmap에서의 행동 ID (-1: 미등록) |
+| `primary_percentage` | float | 전체 행동 중 비율 (%) |
+| `top_actions` | array | 상위 5개 행동 (빈도순) |
+| `description` | string | 영상 행동 요약 설명 |
+
+### 활용 예시
+
+```python
+# 비디오 레벨 행동 확인
+video_action = data["video_action"]
+print(f"주요 행동: {video_action['primary_action']}")
+print(f"비율: {video_action['primary_percentage']}%")
+
+# 상위 행동들
+for action in video_action["top_actions"]:
+    print(f"  - {action['action']}: {action['count']}회 ({action['percentage']}%)")
+```
+
+---
+
 ## 사용 예시
 
 ### 기본 사용
@@ -268,10 +324,10 @@ print(f"주요 행동: {person['action_summary']}")
 ```
 ┌───────────────────────────────────────────────────────────┐
 │  입력                                                      │
-│                                                            │
+ │                                                           │
 │  working/<video>/tubes/metadata.json                       │
 │  → 프레임별 bbox, 트랙 정보                                 │
-│                                                            │
+ │                                                           │
 │  working/<video>/tubes/recognition_results.json            │
 │  → 초별 행동 라벨, labelmap                                 │
 └─────────────────────────┬─────────────────────────────────┘
@@ -279,7 +335,7 @@ print(f"주요 행동: {person['action_summary']}")
                           ▼
 ┌───────────────────────────────────────────────────────────┐
 │  export_action_labels()                                    │
-│                                                            │
+ │                                                           │
 │  1. 비디오 메타데이터 추출 (fps, 해상도)                    │
 │  2. Labelmap 구성                                          │
 │  3. 프레임 → 초 매핑 (frame_idx / fps = second)            │
@@ -290,7 +346,7 @@ print(f"주요 행동: {person['action_summary']}")
                           ▼
 ┌───────────────────────────────────────────────────────────┐
 │  출력                                                      │
-│                                                            │
+ │                                                           │
 │  output/<video>.json                                       │
 │  → 프레임 단위 bbox + 행동 라벨 통합 데이터                 │
 └───────────────────────────────────────────────────────────┘

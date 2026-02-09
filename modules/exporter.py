@@ -33,8 +33,8 @@ def export_action_labels(video_path: str, working_dir: str, output_dir: str) -> 
         [ENG] Dictionary with exported label data
     """
     tubes_dir = os.path.join(working_dir, "tubes")
-    metadata_path = os.path.join(tubes_dir, "metadata.json")
-    recognition_path = os.path.join(tubes_dir, "recognition_results.json")
+    metadata_path = os.path.join(working_dir, "metadata.json")
+    recognition_path = os.path.join(working_dir, "recognition_results.json")
     labelmap_path = os.path.join(working_dir, "label_map.txt")
     
     # [KOR] 데이터 로드
@@ -172,6 +172,53 @@ def export_action_labels(video_path: str, working_dir: str, output_dir: str) -> 
             action = action_info["action"]
             action_counts[action] = action_counts.get(action, 0) + 1
     output_data["summary"]["action_distribution"] = action_counts
+    
+    # ==========================================
+    # [KOR] 영상 전체 행동 라벨 계산
+    # [ENG] Calculate video-level action label
+    # ==========================================
+    total_instances = sum(action_counts.values()) if action_counts else 0
+    
+    if total_instances > 0:
+        # [KOR] 빈도순 정렬
+        # [ENG] Sort by frequency
+        sorted_actions = sorted(action_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # [KOR] 상위 행동들 (비율 포함)
+        # [ENG] Top actions with percentages
+        top_actions = []
+        for action, count in sorted_actions[:5]:
+            percentage = (count / total_instances) * 100
+            top_actions.append({
+                "action": action,
+                "count": count,
+                "percentage": round(percentage, 1)
+            })
+        
+        # [KOR] 주요 행동 (가장 빈번한 행동)
+        # [ENG] Primary action (most frequent)
+        primary_action = sorted_actions[0][0]
+        primary_percentage = (sorted_actions[0][1] / total_instances) * 100
+        
+        # [KOR] 영상 레벨 라벨
+        # [ENG] Video-level label
+        output_data["video_action"] = {
+            "primary_action": primary_action,
+            "primary_action_id": action_to_id.get(primary_action, -1),
+            "primary_percentage": round(primary_percentage, 1),
+            "top_actions": top_actions,
+            "description": f"This video primarily shows '{primary_action}' ({round(primary_percentage, 1)}% of all detected actions)"
+        }
+    else:
+        # [KOR] 탐지된 행동 없음
+        # [ENG] No actions detected
+        output_data["video_action"] = {
+            "primary_action": "unknown",
+            "primary_action_id": -1,
+            "primary_percentage": 0.0,
+            "top_actions": [],
+            "description": "No actions detected in this video"
+        }
     
     # [KOR] output 디렉토리에 저장
     # [ENG] Save to output directory

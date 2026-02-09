@@ -4,7 +4,14 @@
 
 ## 개요
 
-**Detector** 클래스는 비디오에서 사람을 탐지하고 추적하여 개인별 "튜브(tube)"를 추출하는 모듈입니다. YOLO12와 ByteTrack 알고리즘을 기반으로 하며, Kalman 필터 스무딩과 트랙 스티칭 등의 후처리를 수행합니다.
+**Detector** 클래스는 비디오에서 사람을 탐지하고 추적하여 개인별 "튜브(tube)"를 추출하는 모듈입니다. YOLO12와 ByteTrack 알고리즘을 기반으로 하며, Kalman 필터 스무딩, 트랙 스티칭, **CoTracker 궤적 추출** 등의 후처리를 수행합니다.
+
+### 주요 기능
+
+- **사람 탐지 및 추적**: YOLO12 + ByteTrack
+- **트랙 후처리**: Kalman 필터 스무딩, 끊어진 트랙 스티칭
+- **CoTracker 궤적**: 사람별 포인트 궤적 추출 및 필터링
+- **GPU 메모리 최적화**: 처리 후 자동 메모리 정리
 
 ## 클래스: Detector
 
@@ -37,12 +44,12 @@ detector.infer("./data/input/video.mp4", "./data/working/video")
 **생성 결과:**
 ```
 save_dir/
-├── detect/        # 탐지 결과 시각화 (선택적)
-├── track/         # 추적 결과 시각화
+ ├─ detect/        # 탐지 결과 시각화 (선택적)
+ ├─ track/         # 추적 결과 시각화
 └── tubes/         # 추출된 튜브들
-    ├── id_1.mp4
-    ├── id_2.mp4
-    └── metadata.json
+     ├─ ─ id_1.mp4
+     ├─ ─ id_2.mp4
+    └─ ─ metadata.json
 ```
 
 ---
@@ -78,7 +85,37 @@ self.model.track(
 )
 ```
 
-### 3단계: 튜브 추출 (`_extract_tubes`)
+### 3단계: CoTracker 궤적 추출 (`_run_cotracker`)
+
+**CoTrackerOnlinePredictor**를 사용하여 비디오 전체의 포인트 궤적을 추출합니다.
+
+**특징:**
+- 온라인 모드: 비디오를 청크 단위로 처리하여 메모리 효율성 향상
+- 자동 체크포인트 다운로드: `scaled_online.pth`
+- GPU 메모리 관리: 처리 후 자동 정리
+
+```python
+def _run_cotracker(self, video_path, device='cuda'):
+    # 1. 체크포인트 다운로드 (없으면)
+    checkpoint_path = f"./checkpoints/scaled_online.pth"
+    self._download_cotracker_checkpoint(checkpoint_path)
+    
+    # 2. 모델 로드
+    model = CoTrackerOnlinePredictor(checkpoint_path)
+    model = model.to(device)
+    
+    # 3. 비디오 청크 처리
+    # step 간격으로 프레임을 배치 처리
+    
+    # 4. 결과: (T, N, 2) 궤적, (T, N) 가시성
+    return tracks, visibility
+```
+
+**출력:**
+- `tracks`: (T, N, 2) - T프레임, N개 포인트, xy 좌표
+- `visibility`: (T, N) - 각 포인트 가시성
+
+### 4단계: 튜브 추출 (`_extract_tubes`)
 
 추적 결과에서 개인별 튜브를 추출합니다. 이 과정에서 다음 후처리가 적용됩니다:
 

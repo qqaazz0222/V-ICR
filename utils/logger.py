@@ -140,10 +140,10 @@ class Logger:
             error: [KOR] 에러 메시지 (실패 시) / [ENG] Error message (if failed)
         """
         if success:
-            self.console.print(f"    [green][+] {name}[/green] ({format_time(elapsed_time)})")
+            self.console.print(f"   [green][+] {name}[/green] ({format_time(elapsed_time)})")
         else:
             error_msg = f": {error}" if error else ""
-            self.console.print(f"    [red][-] {name}[/red] FAILED{error_msg}")
+            self.console.print(f"   [red][-] {name}[/red] FAILED{error_msg}")
     
     def print_summary(self, results: List[Dict[str, Any]], total_time: float):
         """

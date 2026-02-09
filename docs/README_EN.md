@@ -16,10 +16,12 @@ V-ICR is an end-to-end pipeline that detects and tracks people in video, then re
 
 - **🎯 Precise Person Tracking**: Robust multi-object tracking based on YOLO12 + ByteTrack
 - **🔧 Track Post-processing**: Kalman filter smoothing, broken track stitching
+- **📍 CoTracker Trajectories**: Per-person point trajectory extraction and filtering
 - **🧠 VLM-based Action Recognition**: Per-second action classification using Qwen3-VL-8B
+- **🔍 Phase 0 Action Discovery**: Representative tube sampling → automatic labelmap generation
 - **🔄 Temporal Soft-label Refinement**: Iterative refinement using soft-label candidates and temporal context
-- **📊 Similar Action Grouping**: VLM-based automatic action categorization and labelmap generation
-- **📦 Unified Label Output**: Frame-level bbox + action label integrated data
+- **🎬 Video-level Labels**: Automatic extraction of primary action for entire video
+- **⚡ GPU Memory Optimization**: Per-video memory cleanup and caching
 
 ## 🏗️ System Architecture
 
@@ -28,37 +30,37 @@ Input Video (MP4)
         │
         ▼
 ┌───────────────────┐
-│    Detector       │ ← YOLO12 + ByteTrack
+ │   Detector       │ ← YOLO12 + ByteTrack
 │  (Detection &     │
-│   Tracking)       │
+ │  Tracking)       │
 └─────────┬─────────┘
           │
           ▼
     ┌───────────┐
-    │   Tubes   │ ← Per-person cropped videos
-    └─────┬─────┘
+     │  Tubes   │ ← Per-person cropped videos
+    └─ ────┬─────┘
           │
           ▼
 ┌───────────────────┐
-│   Recognizer      │ ← Qwen3-VL-8B
+ │  Recognizer      │ ← Qwen3-VL-8B
 │  (Action          │
-│   Recognition)    │
-│                   │
+ │  Recognition)    │
+ │                  │
 │  1. Per-second    │
-│     analysis      │
+ │    analysis      │
 │  2. Soft-label    │
-│     top 5         │
+ │    top 5         │
 │  3. Similar action│
-│     grouping      │
+ │    grouping      │
 │  4. Labelmap      │
-│     refinement    │
+ │    refinement    │
 └─────────┬─────────┘
           │
           ▼
 ┌───────────────────┐
-│    Exporter       │
+ │   Exporter       │
 │  (Label Data      │
-│   Generation)     │
+ │  Generation)     │
 └─────────┬─────────┘
           │
           ▼
@@ -69,22 +71,22 @@ Input Video (MP4)
 
 ```
 V-ICR/
-├── run.py                    # Main execution script
-├── requirements.txt          # Python dependencies
-├── checkpoints/              # Model weights
-│   └── yolo12x.pt           # YOLO12 weights
-├── modules/                  # Core modules
-│   ├── detector.py          # Detection and tracking module
-│   ├── recognizer.py        # Action recognition module
-│   ├── exporter.py          # Label data export module
-│   ├── dataset.py           # Dataset utilities
-│   └── bytetrack_tuned.yaml # ByteTrack configuration
-├── utils/                    # Utilities
-│   └── logger.py            # Logging utility
-├── data/                     # Data directory
-│   ├── input/               # Input videos (place MP4 files here)
-│   ├── working/             # Intermediate results
-│   └── output/              # Final label data output
+ ├─ run.py                    # Main execution script
+ ├─ requirements.txt          # Python dependencies
+ ├─ checkpoints/              # Model weights
+ │  └─ ─ yolo12x.pt           # YOLO12 weights
+ ├─ modules/                  # Core modules
+ │   ├─ ─ detector.py          # Detection and tracking module
+ │   ├─ ─ recognizer.py        # Action recognition module
+ │   ├─ ─ exporter.py          # Label data export module
+ │   ├─ ─ dataset.py           # Dataset utilities
+ │  └─ ─ bytetrack_tuned.yaml # ByteTrack configuration
+ ├─ utils/                    # Utilities
+ │  └─ ─ logger.py            # Logging utility
+ ├─ data/                     # Data directory
+ │   ├─ ─ input/               # Input videos (place MP4 files here)
+ │   ├─ ─ working/             # Intermediate results
+ │  └─ ─ output/              # Final label data output
 └── docs/                     # Documentation
 ```
 
@@ -151,10 +153,11 @@ python run.py [OPTIONS]
 
 Options:
   --skip-recognition          Skip action recognition phase (detection only)
-  --refinement-iterations N   Number of refinement iterations (default: 5)
+  --refinement-iterations N   Number of refinement iterations (default: 2)
   --input-dir DIR             Input video directory (default: ./data/input)
   --working-dir DIR           Working directory (default: ./data/working)
   --output-dir DIR            Output directory (default: ./data/output)
+  --dataset NAME              Dataset name (creates subdirectories)
 ```
 
 **Examples:**
@@ -212,9 +215,29 @@ Integrated data containing frame-level bbox and action labels:
   "summary": {
     "total_action_instances": 36,
     "action_distribution": {"boxing practice": 16, "defending": 3}
+  },
+  "video_action": {
+    "primary_action": "boxing practice",
+    "primary_action_id": 1,
+    "primary_percentage": 44.4,
+    "top_actions": [
+      {"action": "boxing practice", "count": 16, "percentage": 44.4},
+      {"action": "defending", "count": 3, "percentage": 8.3}
+    ],
+    "description": "This video primarily shows 'boxing practice' (44.4% of all detected actions)"
   }
 }
 ```
+
+### video_action Field
+
+| Field | Description |
+|-------|-------------|
+| `primary_action` | Most frequent action in the video |
+| `primary_action_id` | Action ID from labelmap |
+| `primary_percentage` | Percentage of all actions (%) |
+| `top_actions` | Top 5 actions by frequency |
+| `description` | Video action summary |
 
 ### label_map.txt
 

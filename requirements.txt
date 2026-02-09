@@ -11,3 +11,4 @@ transformers>=4.38.0
 accelerate
 qwen-vl-utils
 decord
+imageio

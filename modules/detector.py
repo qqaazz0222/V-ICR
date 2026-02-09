@@ -5,6 +5,24 @@ import os
 import cv2
 import shutil
 import numpy as np
+import torch
+import urllib.request
+import sys
+
+# [KOR] CoTracker 모듈 경로 추가
+# [ENG] Add CoTracker module path
+if os.path.join(os.getcwd(), 'modules') not in sys.path:
+    sys.path.append(os.path.join(os.getcwd(), 'modules'))
+
+try:
+    from cotracker.predictor import CoTrackerOnlinePredictor
+    from cotracker.utils.visualizer import Visualizer
+except ImportError:
+    # [KOR] 경로 문제로 실패 시, 직접 경로 설정 시도
+    # [ENG] Try explicit path if import fails
+    from modules.cotracker.predictor import CoTrackerOnlinePredictor
+    from modules.cotracker.utils.visualizer import Visualizer
+
 from ultralytics import YOLO
 
 
@@ -37,6 +55,174 @@ class Detector:
         self.model = YOLO(model_path)
         self.track_results = None
         self.min_tube_length = min_tube_length
+
+    def _download_cotracker_checkpoint(self, checkpoint_path):
+        """
+        [KOR] CoTracker 체크포인트 다운로드
+        [ENG] Download CoTracker checkpoint
+        """
+        if not os.path.exists(checkpoint_path):
+            print(f"    [!] Downloading CoTracker checkpoint to {checkpoint_path}...")
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+            url = "https://huggingface.co/facebook/cotracker/resolve/main/scaled_online.pth"
+            try:
+                urllib.request.urlretrieve(url, checkpoint_path)
+                print("    [!] Download complete.")
+            except Exception as e:
+                print(f"    [!] Failed to download checkpoint: {str(e)}")
+
+    def _run_cotracker(self, video_path, device='cuda'):
+        """
+        [KOR] CoTracker (Online) 실행하여 궤적 추출
+        [ENG] Run CoTracker (Online) to extract trajectories
+        
+        Args:
+            video_path: [KOR] 비디오 경로 / [ENG] Video path
+            device: [KOR] 실행 장치 / [ENG] Execution device
+            
+        Returns:
+            pred_tracks (np.array): (T, N, 2) 궤적 좌표
+            pred_visibility (np.array): (T, N) 가시성 여부
+        """
+        checkpoint_path = "./checkpoints/cotracker_scaled_online.pth"
+        self._download_cotracker_checkpoint(checkpoint_path)
+        
+        if not os.path.exists(checkpoint_path):
+            print("    [!] CoTracker checkpoint missing, skipping.")
+            return None, None
+            
+        try:
+            print(" ├─[>] Running CoTracker (Online)...")
+            
+            # [KOR] Predictor 초기화
+            # [ENG] Init Predictor
+            # Checkpoint is loaded inside CoTrackerOnlinePredictor if passed
+            model = CoTrackerOnlinePredictor(checkpoint=checkpoint_path)
+            if torch.cuda.is_available() and device == 'cuda':
+                model = model.cuda()
+            
+            cap = cv2.VideoCapture(video_path)
+            W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            # [KOR] 긴 축 기준 960으로 리사이즈 (cotracker 권장 또는 메모리 절약)
+            # [ENG] Resize to max dim 960
+            max_dim = 960
+            scale = 1.0
+            if max(W, H) > max_dim:
+                scale = max_dim / max(W, H)
+                new_W, new_H = int(W * scale), int(H * scale)
+            else:
+                new_W, new_H = W, H
+                
+            window_frames = []
+            
+            # [KOR] Step 처리 함수 정의 (online_demo.py 기반)
+            # [ENG] Define step processing function (based on online_demo.py)
+            def _process_step(window_frames, is_first_step):
+                # We need RGB frames here
+                video_chunk = (
+                    torch.tensor(
+                        np.stack(window_frames[-model.step * 2 :]), device=device
+                    )
+                    .float()
+                    .permute(0, 3, 1, 2)[None]
+                )  # (1, T, 3, H, W)
+                
+                return model(
+                    video_chunk,
+                    is_first_step=is_first_step,
+                    grid_size=30, # [KOR] Grid Size = 30
+                    grid_query_frame=0,
+                )
+
+            is_first_step = True
+            idx = 0
+            
+            pred_tracks = None
+            pred_visibility = None
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret: break
+                
+                # [KOR] 리사이즈 및 BGR -> RGB 변환
+                # [ENG] Resize and BGR -> RGB
+                if scale != 1.0:
+                    frame = cv2.resize(frame, (new_W, new_H))
+                
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                window_frames.append(frame_rgb)
+                
+                if idx % model.step == 0 and idx != 0:
+                    pred_tracks, pred_visibility = _process_step(
+                        window_frames,
+                        is_first_step
+                    )
+                    is_first_step = False
+                
+                idx += 1
+            
+            cap.release()
+            
+            # [KOR] 남은 프레임 처리
+            # [ENG] Process remaining frames
+            if window_frames and (idx % model.step != 0 or is_first_step):
+                 # [KOR] online_demo.py 로직 복제
+                 # [ENG] Replicate online_demo.py logic
+                 i = idx - 1
+                 slice_start = -(i % model.step) - model.step - 1
+                 
+                 if abs(slice_start) > len(window_frames):
+                     chunk = window_frames
+                 else:
+                     chunk = window_frames[slice_start:]
+                 
+                 video_chunk = (
+                    torch.tensor(np.stack(chunk), device=device)
+                    .float()
+                    .permute(0, 3, 1, 2)[None]
+                 )
+                 
+                 pred_tracks, pred_visibility = model(
+                    video_chunk,
+                    is_first_step=is_first_step,
+                    grid_size=30,
+                    grid_query_frame=0
+                 )
+                 
+                 del video_chunk, chunk
+
+            # [KOR] 메모리 정리
+            # [ENG] Memory cleanup
+            del window_frames
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            if pred_tracks is None:
+                return None, None
+                
+            # [KOR] 결과 변환 및 스케일 복원
+            # [ENG] Convert results and restore scale
+            tracks = pred_tracks[0].cpu().numpy()
+            vis = pred_visibility[0].cpu().numpy()
+            
+            # [KOR] GPU 텐서 정리
+            # [ENG] Cleanup GPU tensors
+            del pred_tracks, pred_visibility, model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            if scale != 1.0:
+                tracks = tracks / scale
+                
+            return tracks, vis
+            
+        except Exception as e:
+            print(f"    [!] CoTracker failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None, None
     
     def _detect(self, video_path, save_dir):
         """
@@ -98,7 +284,7 @@ class Detector:
         if self.track_results is None:
             self._track(video_path, save_dir)
             
-        print("    [>] Extracting tubes...")
+        print(" ├─[>] Extracting tubes...")
         
         output_dir = os.path.join(save_dir, "tubes")
         os.makedirs(output_dir, exist_ok=True)
@@ -461,7 +647,84 @@ class Detector:
                     'height': target_h
                 }
         
-        print(f"        Tracks: {len(valid_tracks)} valid / {len(track_stats)} total")
+        print(f" │  └─ Tracks: {len(valid_tracks)} valid / {len(track_stats)} total")
+        
+        # ==========================================
+        # [KOR] CoTracker 실행 및 튜브별 궤적 필터링
+        # [ENG] Run CoTracker and Filter Tracks per Tube
+        # ==========================================
+        cotracker_tracks, cotracker_vis = None, None
+        tube_trajectories = {} # tid -> {tracks, vis}
+        
+        if valid_tracks:
+            cotracker_tracks, cotracker_vis = self._run_cotracker(video_path)
+            
+            if cotracker_tracks is not None:
+                print(" ├─[>] Filtering trajectories for tubes...")
+                # [KOR] 각 튜브별로 관련 궤적 필터링
+                # [ENG] Filter relevant trajectories for each tube
+                T, N, _ = cotracker_tracks.shape
+                
+                for tid in valid_tracks:
+                    meta = metadata_skeleton = {
+                        "start": valid_tracks[tid]['start_frame'],
+                        "end": valid_tracks[tid]['end_frame']
+                    }
+                    
+                    # [KOR] 튜브의 BBox 정보 가져오기 (이미 계산됨)
+                    # [ENG] Get tube BBox info (already computed)
+                    # Use a simpler check: check intersection at middle frame or subsampled frames
+                    
+                    relevant_indices = []
+                    
+                    # [KOR] 튜브가 존재하는 프레임 범위
+                    # [ENG] Tube existence frame range
+                    start_f = int(meta["start"])
+                    end_f = int(meta["end"])
+                    
+                    # [KOR] 튜브 BBox 맵핑 (프레임 -> 박스)
+                    # [ENG] Tube BBox mapping
+                    # Note: We haven't filled tube_bboxes yet fully?
+                    # Actually we need to reconstruct tube bboxes from video_detections
+                    # Or just check quickly
+                    
+                    # [KOR] 궤적 점수 계산: 튜브 박스 내부에 존재하는 프레임 수
+                    # [ENG] Trajectory scoring: count frames inside tube box
+                    track_scores = np.zeros(N, dtype=int)
+                    
+                    for f in range(start_f, end_f + 1, 5): # Check every 5th frame for speed
+                        if f >= len(video_detections): continue
+                        if tid not in video_detections[f]: continue
+                        
+                        box = video_detections[f][tid] #(x1, y1, x2, y2)
+                        bx1, by1, bx2, by2 = box
+                        
+                        # [KOR] 현재 프레임의 모든 트랙 포인트
+                        # [ENG] All track points at current frame
+                        # tracks[f, :, 0] is x, tracks[f, :, 1] is y
+                        pts_x = cotracker_tracks[f, :, 0]
+                        pts_y = cotracker_tracks[f, :, 1]
+                        vis = cotracker_vis[f, :]
+                        
+                        # [KOR] 박스 내부 체크
+                        # [ENG] Check inside box
+                        inside = (pts_x >= bx1) & (pts_x <= bx2) & (pts_y >= by1) & (pts_y <= by2) & vis
+                        track_scores[inside] += 1
+                        
+                    # [KOR] 임계값: 튜브 지속시간의 20% 이상 내부에 존재 (또는 최소 3프레임)
+                    # [ENG] Threshold: inside for >20% of tube duration (or min 3 checks)
+                    # Since we checked every 5th frame, threshold is small
+                    duration_checks = (end_f - start_f) // 5 + 1
+                    threshold = max(1, duration_checks * 0.2)
+                    
+                    valid_indices = np.where(track_scores >= threshold)[0]
+                    
+                    if len(valid_indices) > 0:
+                        tube_trajectories[tid] = {
+                            "indices": valid_indices,
+                            "tracks": cotracker_tracks[:, valid_indices, :], # (T, M, 2)
+                            "vis": cotracker_vis[:, valid_indices]      # (T, M)
+                        }
         
         # ==========================================
         # [KOR] Pass 2: 프레임 추출 & 저장
@@ -567,11 +830,78 @@ class Detector:
                     
                     crop = frame[ay1:ay2, ax1:ax2]
                     
-                    # [KOR] 2. 레터박스
-                    # [ENG] 2. Letterbox
                     final_img = letterbox_resize(crop, (target_w, target_h))
                     
+                    # [KOR] 3. CoTracker 궤적 시각화
+                    # [ENG] 3. Visualize CoTracker Trajectories
+                    if cotracker_tracks is not None and tid in tube_trajectories:
+                         traj_data = tube_trajectories[tid]
+                         t_indices = traj_data["indices"]
+                         
+                         # [KOR] 현재 프레임에서 활성화된(보이는) 트랙만 시각화?
+                         # [KOR] 아니면 궤적 전체? 보통 Trail을 그림.
+                         # [ENG] Visualize only active (visible) tracks? Or trail.
+                         
+                         # Check visibility at current frame
+                         vis_mask = cotracker_vis[frame_idx, t_indices] # (M,) bool
+                         
+                         if np.any(vis_mask):
+                             # Draw trail for visible tracks
+                             active_indices = np.where(vis_mask)[0]
+                             
+                             trail_len = 20
+                             start_t = max(0, frame_idx - trail_len)
+                             
+                             # Get segments: (L, K, 2)
+                             # t_indices[active_indices] maps to original global indices
+                             # But we stored sub-set in 'tracks' key of tube_trajectories?
+                             # No, tube_trajectories['tracks'] is (T, M, 2).
+                             # So we take [start_t:frame_idx+1, active_indices, :]
+                             
+                             local_tracks = traj_data['tracks'] # (T, M, 2)
+                             
+                             # Helper to transform coordinates
+                             # We need the params used in letterbox_resize
+                             # calculate them again to be sure
+                             cw, ch = crop.shape[1], crop.shape[0] # Crop size
+                             # Note: crop came from adjust_bbox_to_aspect, so it matches aspect roughly
+                             
+                             scale = min(target_w / cw, target_h / ch)
+                             nw, nh = int(cw * scale), int(ch * scale)
+                             x_off = (target_w - nw) // 2
+                             y_off = (target_h - nh) // 2
+                             
+                             pts_segment = local_tracks[start_t:frame_idx+1, active_indices] # (L, K, 2)
+                             
+                             # Transform
+                             # Frame coords -> Crop coords -> Resize coords -> Final coords
+                             # Box is (ax1, ay1, ax2, ay2)
+                             
+                             # X_final = (X_global - ax1) * scale + x_off
+                             pts_final = np.zeros_like(pts_segment)
+                             pts_final[..., 0] = (pts_segment[..., 0] - ax1) * scale + x_off
+                             pts_final[..., 1] = (pts_segment[..., 1] - ay1) * scale + y_off
+                             
+                             pts_final = pts_final.astype(np.int32)
+                             
+                             # Draw polylines
+                             # cv2.polylines expects list of arrays, each (L, 1, 2)
+                             # We have (L, K, 2). Transpose to (K, L, 2) first
+                             pts_final = pts_final.transpose(1, 0, 2) # (K, L, 2)
+                             
+                             polys = [p.reshape(-1, 1, 2) for p in pts_final]
+                             
+                             # Random colors or fixed?
+                             # Let's use a rainbow dependent on track index or simple cyan
+                             cv2.polylines(final_img, polys, isClosed=False, color=(0, 255, 255), thickness=2)
+                             # Draw heads
+                             for p in pts_final:
+                                 if len(p) > 0:
+                                     cv2.circle(final_img, tuple(p[-1]), 3, (0, 0, 255), -1)
+                    
                     tw['writer'].write(final_img)
+                    
+
         
         # ==========================================
         # [KOR] 메타데이터용 BBox 수집
@@ -603,14 +933,25 @@ class Detector:
                 "height": stats['max_h'],
                 "bboxes": tube_bboxes[tid]
             }
+            
+            # [KOR] Motion Features 저장
+            # [ENG] Save Motion Features
+            if tid in tube_trajectories:
+                motion_path = os.path.join(output_dir, f"motion_features_{tid}.npy")
+                # Save as a dictionary
+                np.save(motion_path, {
+                    "tracks": tube_trajectories[tid]["tracks"], # (T, M, 2)
+                    "vis": tube_trajectories[tid]["vis"],       # (T, M)
+                    "indices": tube_trajectories[tid]["indices"]
+                })
         
         cap.release()
         
-        metadata_path = os.path.join(output_dir, "metadata.json")
+        metadata_path = os.path.join(save_dir, "metadata.json")
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=4)
             
-        print(f"        Tubes: {len(tube_writers)} extracted")
+        print(f" │  └─ Tubes: {len(tube_writers)} extracted")
 
     def infer(self, video_path, save_dir):
         """

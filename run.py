@@ -23,10 +23,12 @@ def parse_args():
         [ENG] Parsed arguments object
     """
     parser = argparse.ArgumentParser(description="V-ICR Video Processor")
+    parser.add_argument("--dataset", type=str, default="demo",
+                        help="Dataset name (default: demo)")
     parser.add_argument("--skip-recognition", action="store_true",
                         help="Skip the recognition phase (detection only)")
-    parser.add_argument("--refinement-iterations", type=int, default=5,
-                        help="Number of refinement iterations for recognition (default: 5)")
+    parser.add_argument("--refinement-iterations", type=int, default=2,
+                        help="Number of refinement iterations for recognition (default: 2)")
     parser.add_argument("--input-dir", type=str, default="./data/input",
                         help="Input video directory (default: ./data/input)")
     parser.add_argument("--working-dir", type=str, default="./data/working",
@@ -48,6 +50,7 @@ if __name__ == "__main__":
     # [KOR] 비디오 데이터셋 로드
     # [ENG] Load video dataset
     dataset = VideoDataset(
+        dataset=args.dataset,
         input_dir=args.input_dir,
         working_dir=args.working_dir,
         output_dir=args.output_dir
@@ -115,6 +118,7 @@ if __name__ == "__main__":
             start_time = time.time()
             
             try:
+                print(f"[>] Processing video: {video.name}")
                 # [KOR] Phase 1: 탐지 및 추적
                 # [ENG] Phase 1: Detection and Tracking
                 detector.infer(video.path, video.working_dir)
@@ -131,13 +135,13 @@ if __name__ == "__main__":
                     
                     # [KOR] Phase 3: 최종 라벨 데이터를 output 디렉토리에 저장
                     # [ENG] Phase 3: Export final labels to output directory
-                    print("    [>] Exporting action labels...")
+                    print(" └─[>] Exporting action labels...")
                     export_data = export_action_labels(
                         video.path, 
                         video.working_dir, 
                         dataset.output_dir
                     )
-                    print(f"        Exported: {video.name}.json ({export_data['num_persons']} persons)")
+                    print(f"     └─ Exported: {video.name}.json ({export_data['num_persons']} persons)")
                 
                 elapsed = time.time() - start_time
                 results.append({
@@ -158,6 +162,22 @@ if __name__ == "__main__":
                     "error": str(e)
                 })
                 logger.print_item_result(video.name, success=False, elapsed_time=elapsed, error=str(e))
+            
+            finally:
+                # [KOR] 비디오별 메모리 정리
+                # [ENG] Per-video memory cleanup
+                import torch
+                import gc
+                
+                # [KOR] Detector 상태 초기화
+                # [ENG] Reset detector state
+                detector.track_results = None
+                
+                # [KOR] GPU 메모리 정리
+                # [ENG] GPU memory cleanup
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             
             progress_ctx.advance()
     

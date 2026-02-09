@@ -16,10 +16,12 @@ V-ICR은 비디오에서 사람을 탐지·추적하고, 각 사람의 행동을
 
 - **🎯 정밀한 사람 추적**: YOLO12 + ByteTrack 기반 강건한 멀티오브젝트 추적
 - **🔧 트랙 후처리**: Kalman 필터 스무딩, 끊어진 트랙 스티칭
+- **📍 CoTracker 궤적 추적**: 사람별 포인트 궤적 추출 및 필터링
 - **🧠 VLM 기반 행동 인식**: Qwen3-VL-8B를 활용한 1초 단위 행동 분류
+- **🔍 Phase 0 Action Discovery**: 대표 튜브 샘플링 → 자동 labelmap 생성
 - **🔄 시간적 soft-label 정제**: Soft-label 후보군과 시간적 맥락을 활용한 반복 정제
-- **📊 유사 행동 그룹화**: VLM 기반 자동 행동 카테고리화 및 labelmap 생성
-- **📦 통합 라벨 출력**: 프레임 단위 bbox + 행동 라벨 통합 데이터
+- **🎬 비디오 레벨 라벨**: 영상 전체에 대한 대표 행동 자동 추출
+- **⚡ GPU 메모리 최적화**: 비디오별 메모리 정리 및 캐싱
 
 ## 🏗️ 시스템 아키텍처
 
@@ -28,30 +30,33 @@ V-ICR은 비디오에서 사람을 탐지·추적하고, 각 사람의 행동을
         │
         ▼
 ┌───────────────────┐
-│    Detector       │ ← YOLO12 + ByteTrack
+ │   Detector       │ ← YOLO12 + ByteTrack + CoTracker
 │  (탐지 & 추적)      │
+│  - 사람 추적       │
+│  - 포인트 궤적 추출  │
 └─────────┬─────────┘
           │
           ▼
     ┌───────────┐
-    │   Tubes   │ ← 개인별 크롭 비디오
-    └─────┬─────┘
+     │  Tubes   │ ← 개인별 크롭 비디오
+    └─ ────┬─────┘
           │
           ▼
 ┌───────────────────┐
-│   Recognizer      │ ← Qwen3-VL-8B
+ │  Recognizer      │ ← Qwen3-VL-8B
 │  (행동 인식)        │
-│                   │
-│  1. 1초 단위 분석    │
-│  2. Soft-label 5개 │
-│  3. 유사행동 그룹화   │
-│  4. Labelmap 정제  │
+ │                  │
+│  Phase 0: 대표 튜브 샘플링 & 어휘 발견 │
+│  Phase 1: Labelmap 기반 분류  │
+│  Phase 2: 반복 정제           │
 └─────────┬─────────┘
           │
           ▼
 ┌───────────────────┐
-│    Exporter       │
+ │   Exporter       │
 │  (라벨 데이터 생성)   │
+│  - 프레임별 라벨    │
+│  - 비디오 레벨 라벨  │
 └─────────┬─────────┘
           │
           ▼
@@ -62,22 +67,22 @@ V-ICR은 비디오에서 사람을 탐지·추적하고, 각 사람의 행동을
 
 ```
 V-ICR/
-├── run.py                    # 메인 실행 스크립트
-├── requirements.txt          # Python 의존성
-├── checkpoints/              # 모델 가중치
-│   └── yolo12x.pt           # YOLO12 가중치
-├── modules/                  # 핵심 모듈
-│   ├── detector.py          # 탐지 및 추적 모듈
-│   ├── recognizer.py        # 행동 인식 모듈
-│   ├── exporter.py          # 라벨 데이터 출력 모듈
-│   ├── dataset.py           # 데이터셋 유틸리티
-│   └── bytetrack_tuned.yaml # ByteTrack 설정
-├── utils/                    # 유틸리티
-│   └── logger.py            # 로깅 유틸리티
-├── data/                     # 데이터 디렉토리
-│   ├── input/               # 입력 비디오 (여기에 MP4 파일 배치)
-│   ├── working/             # 중간 결과물
-│   └── output/              # 최종 라벨 데이터 출력
+ ├─ run.py                    # 메인 실행 스크립트
+ ├─ requirements.txt          # Python 의존성
+ ├─ checkpoints/              # 모델 가중치
+ │  └─ ─ yolo12x.pt           # YOLO12 가중치
+ ├─ modules/                  # 핵심 모듈
+ │   ├─ ─ detector.py          # 탐지 및 추적 모듈
+ │   ├─ ─ recognizer.py        # 행동 인식 모듈
+ │   ├─ ─ exporter.py          # 라벨 데이터 출력 모듈
+ │   ├─ ─ dataset.py           # 데이터셋 유틸리티
+ │  └─ ─ bytetrack_tuned.yaml # ByteTrack 설정
+ ├─ utils/                    # 유틸리티
+ │  └─ ─ logger.py            # 로깅 유틸리티
+ ├─ data/                     # 데이터 디렉토리
+ │   ├─ ─ input/               # 입력 비디오 (여기에 MP4 파일 배치)
+ │   ├─ ─ working/             # 중간 결과물
+ │  └─ ─ output/              # 최종 라벨 데이터 출력
 └── docs/                     # 문서
 ```
 
@@ -144,10 +149,11 @@ python run.py [OPTIONS]
 
 옵션:
   --skip-recognition          행동 인식 단계 스킵 (탐지만 수행)
-  --refinement-iterations N   정제 반복 횟수 (기본값: 5)
+  --refinement-iterations N   정제 반복 횟수 (기본값: 2)
   --input-dir DIR             입력 비디오 디렉토리 (기본값: ./data/input)
   --working-dir DIR           작업 디렉토리 (기본값: ./data/working)
   --output-dir DIR            출력 디렉토리 (기본값: ./data/output)
+  --dataset NAME              데이터셋 이름 (하위 디렉토리 생성)
 ```
 
 **예시:**
@@ -205,9 +211,29 @@ python run.py --input-dir ./my_videos --output-dir ./my_output
   "summary": {
     "total_action_instances": 36,
     "action_distribution": {"boxing practice": 16, "defending": 3}
+  },
+  "video_action": {
+    "primary_action": "boxing practice",
+    "primary_action_id": 1,
+    "primary_percentage": 44.4,
+    "top_actions": [
+      {"action": "boxing practice", "count": 16, "percentage": 44.4},
+      {"action": "defending", "count": 3, "percentage": 8.3}
+    ],
+    "description": "This video primarily shows 'boxing practice' (44.4% of all detected actions)"
   }
 }
 ```
+
+### video_action 필드
+
+| 필드 | 설명 |
+|------|------|
+| `primary_action` | 영상에서 가장 빈번한 행동 |
+| `primary_action_id` | labelmap에서의 행동 ID |
+| `primary_percentage` | 전체 행동 중 비율 (%) |
+| `top_actions` | 상위 5개 행동 (빈도순) |
+| `description` | 영상 행동 요약 설명 |
 
 ### label_map.txt
 

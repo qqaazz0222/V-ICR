@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V-ICR Pipeline Architecture</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Times+New+Roman&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Times New Roman', Times, serif;
+            background: #ffffff;
+            color: #1a1a1a;
+            padding: 40px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Title */
+        .title {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .title h1 {
+            font-size: 22px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .title p {
+            font-size: 14px;
+            color: #555;
+            font-style: italic;
+        }
+
+        /* Pipeline Container */
+        .pipeline {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            overflow-x: auto;
+            padding: 20px 0;
+        }
+
+        /* Stage Box */
+        .stage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stage-box {
+            border: 2px solid #333;
+            border-radius: 4px;
+            background: #fff;
+            min-width: 150px;
+            position: relative;
+        }
+
+        .stage-header {
+            padding: 10px 16px;
+            text-align: center;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .stage-header h3 {
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+
+        .stage-header .subtitle {
+            font-size: 10px;
+            color: #666;
+            font-style: italic;
+        }
+
+        .stage-content {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .stage-box.input {
+            background: #f0f7ff;
+            border-color: #2196F3;
+        }
+        .stage-box.input .stage-header { border-bottom-color: #2196F3; }
+
+        .stage-box.detector {
+            background: #fff8f0;
+            border-color: #FF9800;
+        }
+        .stage-box.detector .stage-header { border-bottom-color: #FF9800; }
+
+        .stage-box.tubes {
+            background: #f5f5f5;
+            border-color: #757575;
+        }
+        .stage-box.tubes .stage-header { border-bottom-color: #757575; }
+
+        .stage-box.recognizer {
+            background: #f8f0ff;
+            border-color: #9C27B0;
+            min-width: 280px;
+        }
+        .stage-box.recognizer .stage-header { border-bottom-color: #9C27B0; }
+
+        .stage-box.exporter {
+            background: #f0fff4;
+            border-color: #4CAF50;
+        }
+        .stage-box.exporter .stage-header { border-bottom-color: #4CAF50; }
+
+        .stage-box.output {
+            background: #f0f7ff;
+            border-color: #1976D2;
+            border-style: dashed;
+        }
+        .stage-box.output .stage-header { border-bottom-color: #1976D2; }
+
+        /* Sub Items inside stage */
+        .sub-item {
+            font-size: 10px;
+            padding: 4px 8px;
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 2px;
+            text-align: center;
+        }
+
+        .sub-item.core { border-left: 3px solid #2196F3; }
+        .sub-item.new { border-left: 3px solid #4CAF50; }
+        .sub-item.opt { border-left: 3px solid #FF9800; }
+
+        /* Arrow between items */
+        .v-arrow {
+            font-size: 10px;
+            color: #888;
+            text-align: center;
+            padding: 1px 0;
+        }
+
+        /* Arrow */
+        .arrow {
+            display: flex;
+            align-items: center;
+            align-self: center;
+            padding: 0 10px;
+            color: #333;
+        }
+
+        .arrow svg {
+            width: 40px;
+            height: 24px;
+        }
+
+        /* Recognizer Internal Flow */
+        .recognizer-flow {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 8px;
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .step-num {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #9C27B0;
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .step-content {
+            flex: 1;
+            font-size: 11px;
+            padding: 6px 10px;
+            background: #fff;
+            border: 1px solid #d0a8e0;
+            border-radius: 3px;
+        }
+
+        .step-desc {
+            font-size: 10px;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        /* Soft-label box */
+        .softlabel-box {
+            background: #fff3e0;
+            border: 1px solid #FF9800;
+            border-radius: 3px;
+            padding: 6px 8px;
+            margin: 4px 0;
+        }
+
+        .softlabel-title {
+            font-size: 11px;
+            font-weight: bold;
+            color: #e65100;
+            margin-bottom: 4px;
+        }
+
+        .softlabel-probs {
+            font-size: 10px;
+            color: #666;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Iteration flow with arrows */
+        .iteration-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 6px;
+            background: #e8f5e9;
+            border: 1px solid #4CAF50;
+            border-radius: 3px;
+        }
+
+        .iter-box {
+            background: #fff;
+            border: 1px solid #66bb6a;
+            border-radius: 3px;
+            padding: 5px 8px;
+            text-align: center;
+            min-width: 55px;
+        }
+
+        .iter-label {
+            font-size: 10px;
+            font-weight: bold;
+            color: #2e7d32;
+        }
+
+        .iter-desc {
+            font-size: 10px;
+            color: #666;
+        }
+
+        .iter-arrow {
+            font-size: 14px;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .iter-dots {
+            font-size: 12px;
+            color: #888;
+            font-weight: bold;
+        }
+
+        /* Final label */
+        .final-label {
+            background: #e3f2fd;
+            border: 2px solid #1976D2;
+            border-radius: 3px;
+            padding: 5px 8px;
+            text-align: center;
+        }
+
+        .final-label-title {
+            font-size: 11px;
+            font-weight: bold;
+            color: #1565c0;
+        }
+
+        /* Output items */
+        .output-item {
+            font-size: 10px;
+            padding: 4px 8px;
+            background: #fff;
+            border: 1px solid #4CAF50;
+            border-radius: 2px;
+            font-family: 'Courier New', monospace;
+            text-align: center;
+        }
+
+        .file-item {
+            font-size: 10px;
+            padding: 4px 8px;
+            background: #fff;
+            border: 1px solid #1976D2;
+            border-radius: 2px;
+            font-family: 'Courier New', monospace;
+            text-align: center;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 35px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: #555;
+        }
+
+        .legend-box {
+            width: 14px;
+            height: 14px;
+            border-radius: 2px;
+            border: 1.5px solid;
+        }
+
+        .legend-box.input { background: #f0f7ff; border-color: #2196F3; }
+        .legend-box.detector { background: #fff8f0; border-color: #FF9800; }
+        .legend-box.recognizer { background: #f8f0ff; border-color: #9C27B0; }
+        .legend-box.exporter { background: #f0fff4; border-color: #4CAF50; }
+
+        .legend-line {
+            width: 14px;
+            height: 3px;
+        }
+
+        /* Detail Section */
+        .detail-section {
+            margin-top: 40px;
+            display: grid;
+            grid-template-columns: repeat(4, 180px);
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .detail-card {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 12px;
+        }
+
+        .detail-card h4 {
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .detail-card ul {
+            list-style: none;
+            font-size: 10px;
+            color: #444;
+        }
+
+        .detail-card li {
+            padding: 2px 0;
+            padding-left: 10px;
+            position: relative;
+        }
+
+        .detail-card li::before {
+            content: '•';
+            position: absolute;
+            left: 0;
+            color: #888;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 25px;
+            font-size: 10px;
+            color: #999;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="title">
+            <h1>V-ICR: Video Iterative Context Refinement Pipeline</h1>
+            <p>End-to-end action recognition with Soft-Label Refinement using YOLO12 + ByteTrack + CoTracker + Qwen3-VL</p>
+        </div>
+
+        <!-- Main Pipeline Flow -->
+        <div class="pipeline">
+            <!-- Input -->
+            <div class="stage">
+                <div class="stage-box input">
+                    <div class="stage-header">
+                        <h3>Input</h3>
+                        <div class="subtitle">Video (MP4)</div>
+                    </div>
+                    <div class="stage-content">
+                        <div class="sub-item">VideoDataset</div>
+                        <div class="sub-item">Label Map (opt.)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow">
+                <svg viewBox="0 0 36 20"><path d="M0 10h28M22 4l8 6-8 6" stroke="#333" stroke-width="1.5" fill="none"/></svg>
+            </div>
+
+            <!-- Detector -->
+            <div class="stage">
+                <div class="stage-box detector">
+                    <div class="stage-header">
+                        <h3>Detector</h3>
+                        <div class="subtitle">Detection & Tracking</div>
+                    </div>
+                    <div class="stage-content">
+                        <div class="sub-item core">YOLO12x</div>
+                        <div class="v-arrow">↓</div>
+                        <div class="sub-item core">ByteTrack</div>
+                        <div class="v-arrow">↓</div>
+                        <div class="sub-item new">CoTracker</div>
+                        <div class="v-arrow">↓</div>
+                        <div class="sub-item opt">Kalman Filter</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow">
+                <svg viewBox="0 0 36 20"><path d="M0 10h28M22 4l8 6-8 6" stroke="#333" stroke-width="1.5" fill="none"/></svg>
+            </div>
+
+            <!-- Tubes -->
+            <div class="stage">
+                <div class="stage-box tubes">
+                    <div class="stage-header">
+                        <h3>Tubes</h3>
+                        <div class="subtitle">Per-person Clips</div>
+                    </div>
+                    <div class="stage-content">
+                        <div class="sub-item">id_1.mp4, id_2.mp4, ...</div>
+                        <div class="sub-item">metadata.json</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow">
+                <svg viewBox="0 0 36 20"><path d="M0 10h28M22 4l8 6-8 6" stroke="#333" stroke-width="1.5" fill="none"/></svg>
+            </div>
+
+            <!-- Recognizer -->
+            <div class="stage">
+                <div class="stage-box recognizer">
+                    <div class="stage-header">
+                        <h3>Recognizer</h3>
+                        <div class="subtitle">VLM-based Soft-Label Refinement</div>
+                    </div>
+                    <div class="recognizer-flow">
+                        <!-- VLM -->
+                        <div class="flow-step">
+                            <div class="step-num">1</div>
+                            <div class="step-content">
+                                VLM Inference (Qwen3-VL)
+                            </div>
+                        </div>
+                        
+                        <div class="v-arrow">↓</div>
+                        
+                        <!-- Soft-Label -->
+                        <div class="softlabel-box">
+                            <div class="softlabel-title">Soft-Label (Top-5)</div>
+                            <div class="softlabel-probs">
+                                P(walking)=0.45, P(running)=0.25, ...
+                            </div>
+                        </div>
+                        
+                        <div class="v-arrow">↓</div>
+                        
+                        <!-- Iterative Refinement with arrows -->
+                        <div class="iteration-flow">
+                            <div class="iter-box iter-1">
+                                <div class="iter-label">Iter 1</div>
+                                <div class="iter-desc">Context + Re-vote</div>
+                            </div>
+                            <div class="iter-arrow">→</div>
+                            <div class="iter-box iter-2">
+                                <div class="iter-label">Iter 2</div>
+                                <div class="iter-desc">Refine</div>
+                            </div>
+                            <div class="iter-arrow">→</div>
+                            <div class="iter-dots">...</div>
+                            <div class="iter-arrow">→</div>
+                            <div class="iter-box iter-n">
+                                <div class="iter-label">Iter N</div>
+                                <div class="iter-desc">Converge</div>
+                            </div>
+                        </div>
+                        
+                        <div class="v-arrow">↓</div>
+                        
+                        <!-- Final Label -->
+                        <div class="final-label">
+                            <div class="final-label-title">Final Labels (argmax)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow">
+                <svg viewBox="0 0 36 20"><path d="M0 10h28M22 4l8 6-8 6" stroke="#333" stroke-width="1.5" fill="none"/></svg>
+            </div>
+
+            <!-- Exporter -->
+            <div class="stage">
+                <div class="stage-box exporter">
+                    <div class="stage-header">
+                        <h3>Exporter</h3>
+                        <div class="subtitle">Label Generation</div>
+                    </div>
+                    <div class="stage-content">
+                        <div class="output-item">video_action</div>
+                        <div class="output-item">per-frame labels</div>
+                        <div class="output-item">statistics</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow">
+                <svg viewBox="0 0 36 20"><path d="M0 10h28M22 4l8 6-8 6" stroke="#333" stroke-width="1.5" fill="none"/></svg>
+            </div>
+
+            <!-- Output -->
+            <div class="stage">
+                <div class="stage-box output">
+                    <div class="stage-header">
+                        <h3>Output</h3>
+                        <div class="subtitle">JSON Labels</div>
+                    </div>
+                    <div class="stage-content">
+                        <div class="file-item">&lt;video&gt;.json</div>
+                        <div class="file-item">label_map.txt</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-box input"></div>
+                <span>Input/Output</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box detector"></div>
+                <span>Detector</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box recognizer"></div>
+                <span>Recognizer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box exporter"></div>
+                <span>Exporter</span>
+            </div>
+            <div class="legend-item" style="margin-left: 16px;">
+                <div style="width: 14px; height: 14px; background: #fff3e0; border: 1px solid #FF9800; border-radius: 2px;"></div>
+                <span>Soft-Label</span>
+            </div>
+            <div class="legend-item">
+                <div style="width: 14px; height: 14px; background: #e8f5e9; border: 1px solid #4CAF50; border-radius: 2px;"></div>
+                <span>Refinement</span>
+            </div>
+        </div>
+
+        <!-- Detail Cards -->
+        <div class="detail-section">
+            <div class="detail-card">
+                <h4>Detection & Tracking</h4>
+                <ul>
+                    <li>YOLO12x person detection</li>
+                    <li>ByteTrack multi-object tracking</li>
+                    <li>CoTracker point trajectories</li>
+                    <li>Kalman filter smoothing</li>
+                    <li>Broken track stitching</li>
+                </ul>
+            </div>
+            <div class="detail-card">
+                <h4>Soft-Label Generation</h4>
+                <ul>
+                    <li>VLM inference per 1-second</li>
+                    <li>Top-5 action candidates</li>
+                    <li>Probability distribution</li>
+                    <li>Multiple-choice format</li>
+                    <li>Temporal segmentation</li>
+                </ul>
+            </div>
+            <div class="detail-card">
+                <h4>Iterative Refinement</h4>
+                <ul>
+                    <li>Context-aware re-voting</li>
+                    <li>Previous/next segment info</li>
+                    <li>Soft-label candidates input</li>
+                    <li>N-round iteration</li>
+                    <li>Convergence to final label</li>
+                </ul>
+            </div>
+            <div class="detail-card">
+                <h4>Output Format</h4>
+                <ul>
+                    <li>video_action: primary action</li>
+                    <li>per-person action timeline</li>
+                    <li>frame-level bbox + labels</li>
+                    <li>action distribution stats</li>
+                    <li>labelmap with grouping</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer">
+            V-ICR: Video Iterative Context Refinement © 2026
+        </div>
+    </div>
+</body>
+</html>
